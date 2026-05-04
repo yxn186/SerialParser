@@ -1,0 +1,155 @@
+{
+    "profileName": "STM32_Remote_V1",
+    "frameLength": 20,
+    "header": "A5",
+    "tail": "5A",
+    "endian": "little",
+    "frameMode": "search_header",
+    "serial": {
+        "baudrate": 115200,
+        "dataBits": 8,
+        "stopBits": "1",
+        "parity": "None"
+    },
+    "rawDisplay": {
+        "mode": "HEX",
+        "encoding": "UTF-8",
+        "paused": false,
+        "autoScroll": true,
+        "showTimestamp": true,
+        "maxLines": 200
+    },
+    "crc": {
+        "enabled": false,
+        "type": "none",
+        "offset": 0,
+        "length": 0,
+        "rangeStart": 0,
+        "rangeLength": 0
+    },
+    "fields": [
+        {
+            "name": "K1",
+            "type": "bool_uint8",
+            "offset": 1,
+            "length": 1,
+            "scale": 1.0,
+            "bias": 0.0,
+            "unit": "",
+            "decimals": 0,
+            "display": "bool",
+            "visible": true,
+            "plot": false
+        },
+        {
+            "name": "K2",
+            "type": "bool_uint8",
+            "offset": 2,
+            "length": 1,
+            "scale": 1.0,
+            "bias": 0.0,
+            "unit": "",
+            "decimals": 0,
+            "display": "bool",
+            "visible": true,
+            "plot": false
+        },
+        {
+            "name": "K3",
+            "type": "bool_uint8",
+            "offset": 3,
+            "length": 1,
+            "scale": 1.0,
+            "bias": 0.0,
+            "unit": "",
+            "decimals": 0,
+            "display": "bool",
+            "visible": true,
+            "plot": false
+        },
+        {
+            "name": "LB",
+            "type": "bool_uint8",
+            "offset": 4,
+            "length": 1,
+            "scale": 1.0,
+            "bias": 0.0,
+            "unit": "",
+            "decimals": 0,
+            "display": "bool",
+            "visible": true,
+            "plot": false
+        },
+        {
+            "name": "RB",
+            "type": "bool_uint8",
+            "offset": 5,
+            "length": 1,
+            "scale": 1.0,
+            "bias": 0.0,
+            "unit": "",
+            "decimals": 0,
+            "display": "bool",
+            "visible": true,
+            "plot": false
+        },
+        {
+            "name": "Vx",
+            "type": "float32",
+            "offset": 6,
+            "length": 4,
+            "scale": 1.0,
+            "bias": 0.0,
+            "unit": "",
+            "decimals": 3,
+            "display": "number",
+            "visible": true,
+            "plot": true
+        },
+        {
+            "name": "Vy",
+            "type": "float32",
+            "offset": 10,
+            "length": 4,
+            "scale": 1.0,
+            "bias": 0.0,
+            "unit": "",
+            "decimals": 3,
+            "display": "number",
+            "visible": true,
+            "plot": true
+        },
+        {
+            "name": "Wz",
+            "type": "float32",
+            "offset": 14,
+            "length": 4,
+            "scale": 1.0,
+            "bias": 0.0,
+            "unit": "",
+            "decimals": 3,
+            "display": "number",
+            "visible": true,
+            "plot": true
+        },
+        {
+            "name": "Mode",
+            "type": "uint8",
+            "offset": 18,
+            "length": 1,
+            "scale": 1.0,
+            "bias": 0.0,
+            "unit": "",
+            "decimals": 0,
+            "display": "enum",
+            "enumMap": {
+                "0": "自动模式",
+                "1": "遥控模式",
+                "2": "调试模式"
+            },
+            "visible": true,
+            "plot": false
+        }
+    ]
+}
+
