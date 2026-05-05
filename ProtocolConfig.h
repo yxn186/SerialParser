@@ -56,6 +56,16 @@ struct RawDisplaySettings
     int maxLines = 200;
 };
 
+struct CurveSettings
+{
+    int timeWindowSeconds = 60;
+    int maxPoints = 2000;
+    bool autoScroll = true;
+    bool autoScaleY = true;
+    double manualYMin = -10.0;
+    double manualYMax = 10.0;
+};
+
 struct FieldValue
 {
     QString name;
@@ -65,6 +75,8 @@ struct FieldValue
     QString unit;
     bool abnormal = false;
     QString statusMessage = "正常";
+    bool hasNumericValue = false;
+    double numericValue = 0.0;
 };
 
 struct ParseResult
@@ -104,6 +116,7 @@ public:
     CrcConfig crc;
     SerialDefaults serial;
     RawDisplaySettings rawDisplay;
+    CurveSettings curve;
     QVector<FieldConfig> fields;
 
     QByteArray headerBytes() const;
@@ -119,4 +132,3 @@ public:
     static QString enumMapToString(const QMap<QString, QString> &map);
     static QMap<QString, QString> enumMapFromString(const QString &text);
 };
-

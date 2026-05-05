@@ -104,15 +104,37 @@ foreach ($FileName in $BuildArtifactFiles) {
     }
 }
 
+$RootReadme = Join-Path $ProjectRoot "README.md"
+$ReleaseReadme = Join-Path $BuildDir "README.md"
+$AppReadme = Join-Path $AppDir "README.md"
+Copy-Item -Force $RootReadme $AppReadme
+$ReleaseReadmeText = Get-Content -Path $RootReadme -Raw -Encoding UTF8
+$ReleaseReadmeText = $ReleaseReadmeText.Replace("resources/readme_hero.png", "app/resources/readme_hero.png")
+$ReleaseReadmeText = $ReleaseReadmeText.Replace("resources/readme_hero_preview.png", "app/resources/readme_hero_preview.png")
+[System.IO.File]::WriteAllText($ReleaseReadme, $ReleaseReadmeText, [System.Text.UTF8Encoding]::new($false))
+
+$RootReadmeHash = (Get-FileHash $RootReadme -Algorithm SHA256).Hash
+$AppReadmeHash = (Get-FileHash $AppReadme -Algorithm SHA256).Hash
+if ($RootReadmeHash -ne $AppReadmeHash) {
+    throw "README sync failed. Root README.md must match build_release/app/README.md before packaging."
+}
+if (!(Select-String -Path $ReleaseReadme -SimpleMatch "app/resources/readme_hero.png" -Quiet)) {
+    throw "Release README image path rewrite failed. build_release/README.md must point to app/resources/readme_hero.png."
+}
+
 $RequiredItems = @(
     @{ Path = "SerialParser.exe"; Message = "Missing root SerialParser.exe launcher." },
     @{ Path = "README.md"; Message = "Missing root README.md." },
+    @{ Path = "app/README.md"; Message = "Missing app/README.md." },
     @{ Path = "app/SerialParserApp.exe"; Message = "Missing app/SerialParserApp.exe." },
+    @{ Path = "app/Qt6Charts.dll"; Message = "Missing app/Qt6Charts.dll. The chart view will not run." },
     @{ Path = "app/Qt6SerialPort.dll"; Message = "Missing app/Qt6SerialPort.dll. The SerialPort module will not run." },
     @{ Path = "app/platforms/qwindows.dll"; Message = "Missing app/platforms/qwindows.dll. Qt platform plugin cannot load." },
     @{ Path = "app/configs"; Message = "Missing app/configs directory." },
     @{ Path = "app/styles"; Message = "Missing app/styles directory." },
-    @{ Path = "app/resources/app_icon.png"; Message = "Missing app/resources/app_icon.png." }
+    @{ Path = "app/resources/app_icon.png"; Message = "Missing app/resources/app_icon.png." },
+    @{ Path = "app/resources/readme_hero.png"; Message = "Missing app/resources/readme_hero.png." },
+    @{ Path = "app/resources/readme_hero_preview.png"; Message = "Missing app/resources/readme_hero_preview.png." }
 )
 
 $HasMissing = $false

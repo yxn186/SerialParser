@@ -50,6 +50,30 @@ static RawDisplaySettings rawDisplayFromJson(const QJsonObject &object)
     return settings;
 }
 
+static QJsonObject curveToJson(const CurveSettings &settings)
+{
+    QJsonObject object;
+    object["timeWindowSeconds"] = settings.timeWindowSeconds;
+    object["maxPoints"] = settings.maxPoints;
+    object["autoScroll"] = settings.autoScroll;
+    object["autoScaleY"] = settings.autoScaleY;
+    object["manualYMin"] = settings.manualYMin;
+    object["manualYMax"] = settings.manualYMax;
+    return object;
+}
+
+static CurveSettings curveFromJson(const QJsonObject &object)
+{
+    CurveSettings settings;
+    settings.timeWindowSeconds = object.value("timeWindowSeconds").toInt(60);
+    settings.maxPoints = object.value("maxPoints").toInt(2000);
+    settings.autoScroll = object.value("autoScroll").toBool(true);
+    settings.autoScaleY = object.value("autoScaleY").toBool(true);
+    settings.manualYMin = object.value("manualYMin").toDouble(-10.0);
+    settings.manualYMax = object.value("manualYMax").toDouble(10.0);
+    return settings;
+}
+
 QByteArray ProtocolConfig::headerBytes() const
 {
     QByteArray bytes;
@@ -202,6 +226,15 @@ bool ProtocolConfig::validate(QStringList *errors) const
     if (rawDisplay.maxLines <= 0) {
         localErrors << "原始数据显示最大行数必须大于 0";
     }
+    if (curve.timeWindowSeconds <= 0) {
+        localErrors << "curve.timeWindowSeconds 必须大于 0";
+    }
+    if (curve.maxPoints <= 0) {
+        localErrors << "curve.maxPoints 必须大于 0";
+    }
+    if (curve.manualYMin >= curve.manualYMax) {
+        localErrors << "curve.manualYMin 必须小于 curve.manualYMax";
+    }
 
     if (errors) {
         *errors = localErrors;
@@ -220,6 +253,7 @@ QJsonObject ProtocolConfig::toJson() const
     object["frameMode"] = frameMode;
     object["serial"] = serialToJson(serial);
     object["rawDisplay"] = rawDisplayToJson(rawDisplay);
+    object["curve"] = curveToJson(curve);
 
     QJsonObject crcObject;
     crcObject["enabled"] = crc.enabled;
@@ -279,6 +313,7 @@ bool ProtocolConfig::fromJson(const QJsonObject &object, ProtocolConfig *config,
     parsed.frameMode = object.value("frameMode").toString("search_header");
     parsed.serial = serialFromJson(object.value("serial").toObject());
     parsed.rawDisplay = rawDisplayFromJson(object.value("rawDisplay").toObject());
+    parsed.curve = curveFromJson(object.value("curve").toObject());
 
     const QJsonObject crcObject = object.value("crc").toObject();
     parsed.crc.enabled = crcObject.value("enabled").toBool(false);
@@ -343,6 +378,7 @@ ProtocolConfig ProtocolConfig::defaultRemoteV1()
     config.frameMode = "search_header";
     config.serial = SerialDefaults{};
     config.rawDisplay = RawDisplaySettings{};
+    config.curve = CurveSettings{};
 
     auto makeBool = [](const QString &name, int offset) {
         FieldConfig field;
@@ -392,4 +428,3 @@ ProtocolConfig ProtocolConfig::defaultRemoteV1()
 
     return config;
 }
-

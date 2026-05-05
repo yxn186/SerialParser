@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ConfigManager.h"
+#include "CurvePanel.h"
 #include "ProtocolConfig.h"
 #include "ProtocolParser.h"
 #include "SerialService.h"
@@ -8,9 +9,11 @@
 #include <QMainWindow>
 #include <QMap>
 #include <QTimer>
+#include <QVector>
 
 class QCheckBox;
 class QComboBox;
+class QDialog;
 class QGroupBox;
 class QLabel;
 class QLineEdit;
@@ -46,6 +49,8 @@ private slots:
     void handleSerialStateChanged(bool opened);
     void sendData();
     void updateOnlineState();
+    void syncPlotFieldFromCurve(const QString &fieldName, bool enabled);
+    void openDetachedCurveWindow();
 
 private:
     void setupUi();
@@ -110,6 +115,8 @@ private:
 
     QTableWidget *m_valueTable = nullptr;
     QTableWidget *m_fieldConfigTable = nullptr;
+    CurvePanel *m_curvePanel = nullptr;
+    QVector<CurvePanel *> m_detachedCurvePanels;
 
     QLineEdit *m_profileNameEdit = nullptr;
     QLineEdit *m_frameLengthEdit = nullptr;

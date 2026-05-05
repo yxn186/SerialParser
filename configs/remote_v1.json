@@ -19,6 +19,14 @@
         "showTimestamp": true,
         "maxLines": 200
     },
+    "curve": {
+        "timeWindowSeconds": 60,
+        "maxPoints": 2000,
+        "autoScroll": true,
+        "autoScaleY": true,
+        "manualYMin": -10.0,
+        "manualYMax": 10.0
+    },
     "crc": {
         "enabled": false,
         "type": "none",
@@ -152,4 +160,3 @@
         }
     ]
 }
-

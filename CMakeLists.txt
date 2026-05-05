@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets SerialPort)
+find_package(Qt6 REQUIRED COMPONENTS Widgets SerialPort Charts)
 
 qt_standard_project_setup()
 
@@ -22,6 +22,8 @@ set(SERIALPARSER_APP_SOURCES
     ProtocolParser.cpp
     ConfigManager.h
     ConfigManager.cpp
+    CurvePanel.h
+    CurvePanel.cpp
     CrcUtil.h
     CrcUtil.cpp
     HexUtil.h
@@ -39,7 +41,7 @@ qt_add_executable(SerialParserApp
     ${SERIALPARSER_APP_SOURCES}
 )
 
-target_link_libraries(SerialParserApp PRIVATE Qt6::Widgets Qt6::SerialPort)
+target_link_libraries(SerialParserApp PRIVATE Qt6::Widgets Qt6::SerialPort Qt6::Charts)
 
 set_target_properties(SerialParserApp PROPERTIES
     OUTPUT_NAME "SerialParserApp"

@@ -374,6 +374,8 @@ bool ProtocolParser::parseFields(const QByteArray &frame, QVector<FieldValue> *v
             }
 
             const double scaled = numericValue * field.scale + field.bias;
+            value.hasNumericValue = true;
+            value.numericValue = scaled;
             if (!value.abnormal && field.hasMin && scaled < field.minValue) {
                 value.abnormal = true;
                 value.statusMessage = "低于最小值";

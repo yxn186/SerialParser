@@ -1,4 +1,4 @@
-<img width="1774" height="887" alt="ChatGPT Image 2026年5月5日 08_04_45" src="https://github.com/user-attachments/assets/164cf170-7896-45d3-8491-d861c5c8bc9c" />
+![SerialParser](resources/readme_hero.png)
 
 # SerialParser
 
@@ -523,9 +523,70 @@ powershell -ExecutionPolicy Bypass -File .\scripts\deploy_release.ps1
 
 然后复制整个 `build_release` 文件夹。
 
+## 实时曲线功能
+
+SerialParser 支持把协议字段实时绘制成曲线，适合观察速度、电压、温度、姿态角、传感器数据等连续数值。
+
+曲线功能位于中间区域的“实时曲线”页。软件解析到有效帧后，会把字段值同步追加到曲线中。默认配置 `remote_v1.json` 中，`Vx`、`Vy`、`Wz` 的 `plot` 已经设置为 `true`，启动后可以直接作为曲线字段使用。
+
+字段是否进入曲线由字段配置里的 `plot` 控制：
+
+```text
+plot = true   加入实时曲线
+plot = false  不加入实时曲线
+```
+
+注意：
+
+- 只有能解析成数字的字段会绘制曲线。
+- `uint8/int8/uint16/int16/uint32/int32/float32/float64/bool_uint8` 可以绘制。
+- `bool_uint8` 会按 `0/1` 绘制，适合看按键状态变化。
+- `raw_hex` 不绘制曲线。
+- 字段异常但数值仍然有限时，曲线仍可显示，便于观察异常趋势。
+
+曲线控制项说明：
+
+- `暂停曲线`：只暂停曲线追加和刷新，不影响串口接收、协议解析、实时字段表、统计和原始数据窗口。
+- `清空曲线`：只清空曲线缓存，不清空串口接收数据和解析统计。
+- `自动滚动`：开启后 X 轴自动跟随最新数据。
+- `Y 轴自适应`：开启后按当前可见曲线自动调整 Y 轴范围。
+- `时间窗口`：默认保留最近 `60 s` 的曲线数据。
+- `最大点数`：默认每条曲线最多保留 `2000` 个点，避免长时间运行后内存无限增长。
+- `Y 最小 / Y 最大`：关闭 `Y 轴自适应` 后生效，用于手动固定显示范围。
+- `独立窗口`：把实时曲线弹出为一个新的非模态窗口，主界面仍可正常操作。
+- 独立曲线窗口右上角有 `置顶` 开关，开启后窗口会保持在其它窗口上方。
+
+曲线设置会保存到 JSON 的 `curve` 对象中：
+
+```json
+{
+    "curve": {
+        "timeWindowSeconds": 60,
+        "maxPoints": 2000,
+        "autoScroll": true,
+        "autoScaleY": true,
+        "manualYMin": -10.0,
+        "manualYMax": 10.0
+    }
+}
+```
+
+## 文档维护说明
+
+项目文档以根目录下的 `README.md` 为唯一准源。
+
+发布目录中的：
+
+```text
+build_release/README.md
+build_release/app/README.md
+```
+
+都由 `scripts/deploy_release.ps1` 从根目录 `README.md` 自动复制生成。部署脚本会在打包前比较 SHA256，三份 README 不一致时会停止打包，避免 GitHub Release 中带旧说明。
+
 ## 九、后续可扩展功能
 
-- 实时曲线。
+- 曲线游标读数、截图导出和 CSV 导出。
 - CSV 记录。
 - 数据回放。
 - 反向发送结构化数据到 STM32。

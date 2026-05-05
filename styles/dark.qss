@@ -102,6 +102,50 @@ QComboBox::down-arrow {
     height: 12px;
 }
 
+QSpinBox#CurveSpinBox, QDoubleSpinBox#CurveSpinBox {
+    min-height: 40px;
+    padding-right: 34px;
+}
+
+QSpinBox#CurveSpinBox::up-button, QDoubleSpinBox#CurveSpinBox::up-button {
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 30px;
+    height: 20px;
+    border-left: 1px solid #2a3a4a;
+    border-bottom: 1px solid #2a3a4a;
+    border-top-right-radius: 6px;
+    background: #13202a;
+}
+
+QSpinBox#CurveSpinBox::up-arrow, QDoubleSpinBox#CurveSpinBox::up-arrow {
+    image: url("__STYLE_DIR__/chevron-up.svg");
+    width: 11px;
+    height: 11px;
+}
+
+QSpinBox#CurveSpinBox::down-button, QDoubleSpinBox#CurveSpinBox::down-button {
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    width: 30px;
+    height: 20px;
+    border-left: 1px solid #2a3a4a;
+    border-bottom-right-radius: 6px;
+    background: #13202a;
+}
+
+QSpinBox#CurveSpinBox::down-arrow, QDoubleSpinBox#CurveSpinBox::down-arrow {
+    image: url("__STYLE_DIR__/chevron-down.svg");
+    width: 11px;
+    height: 11px;
+}
+
+QSpinBox#CurveSpinBox::up-button:hover, QDoubleSpinBox#CurveSpinBox::up-button:hover,
+QSpinBox#CurveSpinBox::down-button:hover, QDoubleSpinBox#CurveSpinBox::down-button:hover {
+    background: #1d3442;
+    border-left-color: #42cfe8;
+}
+
 QTabWidget::pane {
     border: 1px solid #253342;
     border-radius: 8px;

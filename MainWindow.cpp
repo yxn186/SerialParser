@@ -248,6 +248,7 @@ QWidget *MainWindow::setupValuePanel()
     QVBoxLayout *layout = new QVBoxLayout(panel);
     layout->setContentsMargins(0, 0, 0, 0);
 
+    QTabWidget *tabs = new QTabWidget(panel);
     QGroupBox *tableGroup = new QGroupBox("实时字段值", panel);
     QVBoxLayout *tableLayout = new QVBoxLayout(tableGroup);
     m_valueTable = new QTableWidget(tableGroup);
@@ -265,7 +266,11 @@ QWidget *MainWindow::setupValuePanel()
     m_valueTable->horizontalScrollBar()->setSingleStep(24);
     tableLayout->addWidget(m_valueTable);
 
-    layout->addWidget(tableGroup, 4);
+    m_curvePanel = new CurvePanel(tabs);
+    tabs->addTab(tableGroup, "实时字段值");
+    tabs->addTab(m_curvePanel, "实时曲线");
+
+    layout->addWidget(tabs, 4);
     layout->addWidget(setupStatsPanel(), 1);
     return panel;
 }
@@ -538,6 +543,8 @@ void MainWindow::setupConnections()
     connect(&m_parser, &ProtocolParser::errorOccurred, this, [this](const QString &message) {
         appendLog(message, true);
     });
+    connect(m_curvePanel, &CurvePanel::plotFieldChanged, this, &MainWindow::syncPlotFieldFromCurve);
+    connect(m_curvePanel, &CurvePanel::detachRequested, this, &MainWindow::openDetachedCurveWindow);
     connect(m_openCloseButton, &QPushButton::clicked, this, &MainWindow::toggleSerialPort);
 }
 
@@ -702,6 +709,12 @@ void MainWindow::applyUiConfig()
     m_profileLabel->setText("配置：" + config.profileName);
     m_rawDataEdit->setMaximumBlockCount(config.rawDisplay.maxLines);
     populateValueTable(config.fields);
+    m_curvePanel->setConfig(config);
+    for (CurvePanel *panel : m_detachedCurvePanels) {
+        if (panel) {
+            panel->setConfig(config);
+        }
+    }
     appendLog("配置已应用到解析器");
 }
 
@@ -906,7 +919,7 @@ max = 12.6</pre>
     addPage("可见/曲线", R"(
         <h2>visible 和 plot</h2>
         <p><b>visible</b> 控制字段是否显示在实时字段值表中。</p>
-        <p><b>plot</b> 是预留字段，表示后续是否用于曲线显示。第一版暂不实现曲线。</p>
+        <p><b>plot</b> 控制字段是否加入实时曲线。只有数值字段会绘制，<code>raw_hex</code> 不绘制。</p>
         <h3>填写方式</h3>
         <pre>true
 false</pre>
@@ -1047,7 +1060,16 @@ void MainWindow::showUserGuide()
     for (const GuidePage &page : pages) {
         QTextBrowser *browser = new QTextBrowser(tabs);
         browser->setOpenExternalLinks(false);
-        browser->setMarkdown(page.markdown);
+        // README 使用相对路径引用图片；搜索路径和 baseUrl 都指向 README 所在目录，发布版可离线显示。
+        const QString readmeDir = QFileInfo(readmePath).absolutePath();
+        browser->setSearchPaths({readmeDir});
+        browser->document()->setBaseUrl(QUrl::fromLocalFile(readmeDir + QDir::separator()));
+        QString pageMarkdown = page.markdown;
+        // GitHub README 继续使用原图；应用内简介页使用较小预览图，避免撑满说明窗口。
+        if (pageMarkdown.contains("resources/readme_hero.png")) {
+            pageMarkdown.replace("resources/readme_hero.png", "resources/readme_hero_preview.png");
+        }
+        browser->document()->setMarkdown(pageMarkdown, QTextDocument::MarkdownDialectGitHub);
         tabs->addTab(browser, page.title.left(16));
     }
 
@@ -1114,6 +1136,12 @@ void MainWindow::handleFrameParsed(const ParseResult &result)
 {
     if (result.valid) {
         updateValueTable(result.fieldValues);
+        m_curvePanel->appendFrame(result);
+        for (CurvePanel *panel : m_detachedCurvePanels) {
+            if (panel) {
+                panel->appendFrame(result);
+            }
+        }
     }
 }
 
@@ -1191,6 +1219,73 @@ void MainWindow::updateOnlineState()
     setOnlineBadge(online);
 }
 
+void MainWindow::syncPlotFieldFromCurve(const QString &fieldName, bool enabled)
+{
+    for (int row = 0; row < m_fieldConfigTable->rowCount(); ++row) {
+        if (tableText(m_fieldConfigTable, row, FieldNameColumn) == fieldName) {
+            setTableText(m_fieldConfigTable, row, FieldPlotColumn, boolToText(enabled));
+            break;
+        }
+    }
+    m_curvePanel->setPlotFieldEnabled(fieldName, enabled);
+    for (CurvePanel *panel : m_detachedCurvePanels) {
+        if (panel) {
+            panel->setPlotFieldEnabled(fieldName, enabled);
+        }
+    }
+}
+
+void MainWindow::openDetachedCurveWindow()
+{
+    QDialog *dialog = new QDialog(this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowModality(Qt::NonModal);
+    dialog->setWindowTitle("SerialParser 实时曲线");
+    dialog->resize(980, 720);
+
+    QVBoxLayout *layout = new QVBoxLayout(dialog);
+    QHBoxLayout *toolbar = new QHBoxLayout;
+    QLabel *title = new QLabel("实时曲线独立窗口", dialog);
+    title->setStyleSheet("font-weight: 700; color: #72f7d0;");
+    QCheckBox *topMostCheck = new QCheckBox("置顶", dialog);
+    toolbar->addWidget(title);
+    toolbar->addStretch();
+    toolbar->addWidget(topMostCheck);
+
+    CurvePanel *panel = new CurvePanel(dialog);
+    panel->setConfig(m_config);
+    const QMap<QString, bool> plotStates = m_curvePanel->plotFieldStates();
+    for (auto it = plotStates.constBegin(); it != plotStates.constEnd(); ++it) {
+        panel->setPlotFieldEnabled(it.key(), it.value());
+    }
+
+    layout->addLayout(toolbar);
+    layout->addWidget(panel, 1);
+
+    m_detachedCurvePanels.append(panel);
+    connect(dialog, &QObject::destroyed, this, [this, panel]() {
+        m_detachedCurvePanels.removeAll(panel);
+    });
+    connect(panel, &CurvePanel::plotFieldChanged, this, &MainWindow::syncPlotFieldFromCurve);
+    connect(panel, &CurvePanel::detachRequested, this, &MainWindow::openDetachedCurveWindow);
+    connect(topMostCheck, &QCheckBox::toggled, dialog, [dialog](bool checked) {
+        Qt::WindowFlags flags = dialog->windowFlags();
+        if (checked) {
+            flags |= Qt::WindowStaysOnTopHint;
+        } else {
+            flags &= ~Qt::WindowStaysOnTopHint;
+        }
+        dialog->setWindowFlags(flags);
+        dialog->show();
+        dialog->raise();
+        dialog->activateWindow();
+    });
+
+    dialog->show();
+    dialog->raise();
+    dialog->activateWindow();
+}
+
 void MainWindow::applyConfigToUi(const ProtocolConfig &config)
 {
     m_config = config;
@@ -1218,6 +1313,12 @@ void MainWindow::applyConfigToUi(const ProtocolConfig &config)
     applySerialDefaultsToUi(config.serial);
     populateFieldConfigTable(config.fields);
     populateValueTable(config.fields);
+    m_curvePanel->setConfig(config);
+    for (CurvePanel *panel : m_detachedCurvePanels) {
+        if (panel) {
+            panel->setConfig(config);
+        }
+    }
 
     index = m_rawModeCombo->findData(config.rawDisplay.mode);
     if (index >= 0) {
@@ -1257,6 +1358,7 @@ bool MainWindow::readConfigFromUi(ProtocolConfig *config, QStringList *errors) c
     parsed.frameMode = m_frameModeCombo->currentData().toString();
     parsed.serial = readSerialDefaultsFromUi();
     parsed.rawDisplay = readRawDisplaySettingsFromUi();
+    parsed.curve = m_curvePanel->settings();
 
     parsed.crc.enabled = m_crcEnabledCheck->isChecked();
     parsed.crc.type = m_crcTypeCombo->currentText();
