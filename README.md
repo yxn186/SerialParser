@@ -1,3 +1,4 @@
+<img width="1774" height="887" alt="ChatGPT Image 2026年5月5日 08_04_45" src="https://github.com/user-attachments/assets/164cf170-7896-45d3-8491-d861c5c8bc9c" />
 # SerialParser
 
 SerialParser 是一个 Windows 桌面串口上位机工具，基于 C++17、Qt 6 Widgets、Qt SerialPort 和 CMake 开发。
