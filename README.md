@@ -467,6 +467,65 @@ dist/SerialParser-Windows-x64.zip
 
 这个 zip 包里包含完整的 `build_release` 文件夹。用户下载后解压，双击 `build_release/SerialParser.exe` 即可运行。
 
+### Linux AppImage 自动构建
+
+仓库已经包含 GitHub Actions 工作流：
+
+```text
+.github/workflows/build-linux.yml
+```
+
+它会在 GitHub 的 Ubuntu 22.04 环境中安装 Linux 版 Qt 6.11.0、编译项目，并生成：
+
+```text
+SerialParser-Linux-x86_64.AppImage
+```
+
+手动构建方式：
+
+1. 打开 GitHub 仓库页面。
+2. 进入 `Actions`。
+3. 选择 `Build Linux AppImage`。
+4. 点击 `Run workflow`。
+5. 构建完成后，在该次 workflow 的 `Artifacts` 中下载 `SerialParser-Linux-x86_64`。
+
+发布构建方式：
+
+```powershell
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+推送 `v*` 标签后，GitHub Actions 会自动构建 Linux AppImage，并上传到对应的 GitHub Release。
+
+Linux 用户下载后运行：
+
+```bash
+chmod +x SerialParser-Linux-x86_64.AppImage
+./SerialParser-Linux-x86_64.AppImage
+```
+
+如果 Linux 下无法打开串口，通常是串口权限问题，可以执行：
+
+```bash
+sudo usermod -aG dialout $USER
+```
+
+然后注销或重启系统后再试。
+
+Linux 构建脚本也可以在 WSL2 或原生 Linux 中手动使用：
+
+```bash
+./scripts/build_linux.sh
+./scripts/deploy_linux_appimage.sh
+```
+
+手动运行前需要先安装 Linux 版 Qt，并让 `QT_PREFIX` 或 `CMAKE_PREFIX_PATH` 指向 Qt 安装目录，例如：
+
+```bash
+export QT_PREFIX="$HOME/Qt/6.11.0/gcc_64"
+```
+
 ## 八、常见问题
 
 ### 检测不到串口
