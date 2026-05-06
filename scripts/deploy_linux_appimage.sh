@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Linux AppImage 打包脚本。
-# 依赖 linuxdeployqt AppImage，默认路径为项目根目录 linuxdeployqt-continuous-x86_64.AppImage。
+# 依赖 linuxdeploy 和 linuxdeploy-plugin-qt，适合 Qt 5 / Qt 6 应用打包。
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -11,7 +11,8 @@ BUILD_DIR="${BUILD_DIR:-build_linux}"
 APPDIR="${APPDIR:-AppDir}"
 OUTPUT_NAME="${OUTPUT_NAME:-SerialParser-Linux-x86_64.AppImage}"
 QT_PREFIX="${QT_PREFIX:-${CMAKE_PREFIX_PATH:-$HOME/Qt/6.11.0/gcc_64}}"
-LINUXDEPLOYQT="${LINUXDEPLOYQT:-$ROOT_DIR/linuxdeployqt-continuous-x86_64.AppImage}"
+LINUXDEPLOY="${LINUXDEPLOY:-$ROOT_DIR/linuxdeploy-x86_64.AppImage}"
+LINUXDEPLOY_PLUGIN_QT="${LINUXDEPLOY_PLUGIN_QT:-$ROOT_DIR/linuxdeploy-plugin-qt-x86_64.AppImage}"
 
 APP_BINARY="$ROOT_DIR/$BUILD_DIR/SerialParserApp"
 
@@ -20,9 +21,15 @@ if [[ ! -x "$APP_BINARY" ]]; then
     exit 1
 fi
 
-if [[ ! -x "$LINUXDEPLOYQT" ]]; then
-    echo "错误：找不到可执行 linuxdeployqt：$LINUXDEPLOYQT"
-    echo "可从 https://github.com/probonopd/linuxdeployqt/releases/download/continuous/linuxdeployqt-continuous-x86_64.AppImage 下载。"
+if [[ ! -x "$LINUXDEPLOY" ]]; then
+    echo "错误：找不到可执行 linuxdeploy：$LINUXDEPLOY"
+    echo "可从 https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage 下载。"
+    exit 1
+fi
+
+if [[ ! -x "$LINUXDEPLOY_PLUGIN_QT" ]]; then
+    echo "错误：找不到可执行 linuxdeploy-plugin-qt：$LINUXDEPLOY_PLUGIN_QT"
+    echo "可从 https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage 下载。"
     exit 1
 fi
 
@@ -53,19 +60,24 @@ EOF
 
 export PATH="$QT_PREFIX/bin:$PATH"
 export QMAKE="${QMAKE:-$QT_PREFIX/bin/qmake}"
+export LD_LIBRARY_PATH="$QT_PREFIX/lib:${LD_LIBRARY_PATH:-}"
+export EXTRA_QT_PLUGINS="${EXTRA_QT_PLUGINS:-platforms/libqxcb.so}"
+export DEBUG="${DEBUG:-1}"
 
 rm -f "$OUTPUT_NAME"
 
-"$LINUXDEPLOYQT" \
-    "$APPDIR/usr/share/applications/serialparser.desktop" \
-    -appimage \
-    -bundle-non-qt-libs \
-    -unsupported-allow-new-glibc
+"$LINUXDEPLOY" \
+    --appdir "$APPDIR" \
+    --executable "$APPDIR/usr/bin/SerialParserApp" \
+    --desktop-file "$APPDIR/usr/share/applications/serialparser.desktop" \
+    --icon-file "$ROOT_DIR/resources/app_icon.png" \
+    --plugin qt \
+    --output appimage
 
-APPIMAGE_PATH="$(find "$ROOT_DIR" -maxdepth 1 -type f -name '*.AppImage' ! -name 'linuxdeployqt*' | head -n 1)"
+APPIMAGE_PATH="$(find "$ROOT_DIR" -maxdepth 1 -type f -name '*.AppImage' ! -name 'linuxdeploy*' | head -n 1)"
 
 if [[ -z "$APPIMAGE_PATH" ]]; then
-    echo "错误：linuxdeployqt 未生成 AppImage。"
+    echo "错误：linuxdeploy 未生成 AppImage。"
     exit 1
 fi
 

@@ -62,10 +62,11 @@ jobs:
           chmod +x scripts/build_linux.sh scripts/deploy_linux_appimage.sh
           ./scripts/build_linux.sh
 
-      - name: Download linuxdeployqt
+      - name: Download linuxdeploy
         run: |
-          wget -O linuxdeployqt-continuous-x86_64.AppImage https://github.com/probonopd/linuxdeployqt/releases/download/continuous/linuxdeployqt-continuous-x86_64.AppImage
-          chmod +x linuxdeployqt-continuous-x86_64.AppImage
+          wget -O linuxdeploy-x86_64.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -O linuxdeploy-plugin-qt-x86_64.AppImage https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-qt-x86_64.AppImage
 
       - name: Package AppImage
         run: |
