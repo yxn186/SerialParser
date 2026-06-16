@@ -17,6 +17,7 @@
 #include <QPainter>
 #include <QPen>
 #include <QPushButton>
+#include <QSet>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QTableWidget>
@@ -285,11 +286,17 @@ void CurvePanel::clearCurves()
 
 void CurvePanel::rebuildFieldList(const QVector<FieldConfig> &fields)
 {
+    QSet<QLineSeries *> removedSeries;
     for (const QString &fieldName : m_fieldOrder) {
-        SeriesState &state = m_series[fieldName];
-        if (state.series) {
-            m_chart->removeSeries(state.series);
-            delete state.series;
+        auto it = m_series.find(fieldName);
+        if (it == m_series.end()) {
+            continue;
+        }
+        QLineSeries *series = it->series;
+        if (series && !removedSeries.contains(series)) {
+            removedSeries.insert(series);
+            m_chart->removeSeries(series);
+            delete series;
         }
     }
     m_series.clear();

@@ -25,7 +25,7 @@ bool ProtocolParser::setConfig(const ProtocolConfig &config, QStringList *errors
     }
     m_config = config;
     clearBuffer();
-    emitStats();
+    resetStats();
     if (errors) {
         errors->clear();
     }

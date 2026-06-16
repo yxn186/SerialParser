@@ -52,13 +52,15 @@ QVector<ConfigInfo> ConfigManager::scanConfigs(QStringList *warnings)
         warnings->clear();
     }
 
-    QString ensureError;
-    if (!ensureDefaultConfig(&ensureError) && warnings) {
-        *warnings << ensureError;
+    QDir dir(m_configDirPath);
+    if (!dir.exists() && !dir.mkpath(".")) {
+        if (warnings) {
+            *warnings << "无法创建 configs 目录：" + m_configDirPath;
+        }
+        return {};
     }
 
     QVector<ConfigInfo> result;
-    QDir dir(m_configDirPath);
     const QFileInfoList files = dir.entryInfoList({"*.json"}, QDir::Files, QDir::Name);
     for (const QFileInfo &fileInfo : files) {
         ProtocolConfig config;
@@ -70,27 +72,19 @@ QVector<ConfigInfo> ConfigManager::scanConfigs(QStringList *warnings)
             }
             continue;
         }
-        result.append({config.profileName, fileInfo.absoluteFilePath()});
+        result.append({config.profileName, fileInfo.fileName(), fileInfo.absoluteFilePath()});
     }
 
-    bool hasDefault = false;
-    for (const ConfigInfo &info : result) {
-        if (QFileInfo(info.filePath).fileName() == "remote_v1.json") {
-            hasDefault = true;
-            break;
-        }
-    }
-
-    // 如果默认配置损坏，覆盖写入内置默认配置，保证程序至少有一个可用配置。
-    if (!hasDefault) {
+    // 只有没有任何可用配置时才生成默认配置，避免用户改名保存后又被自动补回 remote_v1.json。
+    if (result.isEmpty()) {
         QString saveError;
         if (saveConfig(defaultConfigPath(), ProtocolConfig::defaultRemoteV1(), &saveError)) {
-            result.prepend({"STM32_Remote_V1", defaultConfigPath()});
+            result.prepend({"STM32_Remote_V1", "remote_v1.json", defaultConfigPath()});
             if (warnings) {
-                *warnings << "默认 remote_v1.json 不可用，已使用内置默认配置重新生成。";
+                *warnings << "没有可用配置，已使用内置默认配置生成 remote_v1.json。";
             }
         } else if (warnings) {
-            *warnings << "默认 remote_v1.json 重新生成失败：" + saveError;
+            *warnings << "默认 remote_v1.json 生成失败：" + saveError;
         }
     }
 

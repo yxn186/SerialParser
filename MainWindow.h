@@ -7,6 +7,7 @@
 #include "SerialService.h"
 
 #include <QMainWindow>
+#include <QFileSystemWatcher>
 #include <QMap>
 #include <QTimer>
 #include <QVector>
@@ -14,15 +15,19 @@
 class QCheckBox;
 class QComboBox;
 class QDialog;
+class QDoubleSpinBox;
 class QGroupBox;
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
 class QPushButton;
+class QScrollArea;
+class QSlider;
 class QSpinBox;
 class QTableWidget;
 class QTextEdit;
 class QWidget;
+class QVBoxLayout;
 
 class MainWindow : public QMainWindow
 {
@@ -38,6 +43,7 @@ private slots:
     void loadSelectedConfig();
     void saveCurrentConfig();
     void saveConfigAs();
+    void importConfig();
     void openConfigFolder();
     void applyUiConfig();
     void autoCalculateFieldLayout();
@@ -48,17 +54,34 @@ private slots:
     void handleParserStats(const ParserStats &stats);
     void handleSerialStateChanged(bool opened);
     void sendData();
+    void sendRemoteFrame();
+    void toggleRemoteSending();
+    void updateRemoteSendInterval();
     void updateOnlineState();
     void syncPlotFieldFromCurve(const QString &fieldName, bool enabled);
     void openDetachedCurveWindow();
 
 private:
+    struct RemoteFieldEditor
+    {
+        FieldConfig field;
+        QLineEdit *valueEdit = nullptr;
+        QSlider *slider = nullptr;
+        QCheckBox *switchBox = nullptr;
+        QComboBox *enumCombo = nullptr;
+        QDoubleSpinBox *minSpin = nullptr;
+        QDoubleSpinBox *maxSpin = nullptr;
+    };
+
     void setupUi();
     QWidget *setupHeader();
     QGroupBox *setupSerialPanel();
     QGroupBox *setupConfigPanel();
     QWidget *setupValuePanel();
     QWidget *setupProtocolTabs();
+    QWidget *setupReceivePage();
+    QWidget *setupRemoteControlPage();
+    QGroupBox *setupRemoteControlPanel();
     QWidget *setupRawAndLogPanel();
     QGroupBox *setupSendPanel();
     QWidget *setupStatsPanel();
@@ -74,6 +97,12 @@ private:
     void setFieldTypeAtRow(int row, const QString &type);
     void populateValueTable(const QVector<FieldConfig> &fields);
     void updateValueTable(const QVector<FieldValue> &values);
+    void populateRemoteControlPanel(const QVector<FieldConfig> &fields);
+    QWidget *createRemoteFieldRow(const FieldConfig &field, RemoteFieldEditor *editor);
+    void updateRemoteFramePreview();
+    bool buildRemoteFrame(QByteArray *frame, QStringList *errors) const;
+    bool transmitRemoteFrame(bool showDialog);
+    void stopRemoteSending();
     void applySerialDefaultsToUi(const SerialDefaults &serial);
     SerialDefaults readSerialDefaultsFromUi() const;
     RawDisplaySettings readRawDisplaySettingsFromUi() const;
@@ -84,6 +113,9 @@ private:
     void setOnlineBadge(bool online);
     QString currentRawEncoding() const;
     QString sanitizeText(const QString &text) const;
+    QString configDisplayName(const ConfigInfo &info) const;
+    void updateConfigTitle();
+    void updateConfigWatcher();
     QString profileFileName(const QString &profileName) const;
     static QString boolToText(bool value);
     static bool textToBool(const QString &text);
@@ -94,10 +126,11 @@ private:
     ProtocolParser m_parser;
     ConfigManager m_configManager;
     ProtocolConfig m_config;
-    QMap<QString, QString> m_profilePaths;
     QString m_currentConfigPath;
+    QFileSystemWatcher m_configWatcher;
     ParserStats m_lastStats;
     QTimer m_statusTimer;
+    QTimer m_remoteSendTimer;
 
     QLabel *m_profileLabel = nullptr;
     QLabel *m_onlineBadge = nullptr;
@@ -145,6 +178,14 @@ private:
     QComboBox *m_sendEncodingCombo = nullptr;
     QComboBox *m_sendNewlineCombo = nullptr;
     QLineEdit *m_sendEdit = nullptr;
+
+    QWidget *m_remoteFieldContainer = nullptr;
+    QVBoxLayout *m_remoteFieldLayout = nullptr;
+    QVector<RemoteFieldEditor> m_remoteEditors;
+    QSpinBox *m_remoteFrequencySpin = nullptr;
+    QPushButton *m_remoteStartStopButton = nullptr;
+    QPlainTextEdit *m_remotePreviewEdit = nullptr;
+    QLabel *m_remoteFrameInfoLabel = nullptr;
 
     QLabel *m_totalBytesLabel = nullptr;
     QLabel *m_candidateFramesLabel = nullptr;

@@ -198,10 +198,16 @@ bool ProtocolConfig::validate(QStringList *errors) const
         }
     }
 
+    QSet<QString> fieldNames;
     for (const FieldConfig &field : fields) {
-        const QString prefix = QString("字段 [%1]：").arg(field.name.isEmpty() ? "(未命名)" : field.name);
-        if (field.name.trimmed().isEmpty()) {
+        const QString normalizedName = field.name.trimmed();
+        const QString prefix = QString("字段 [%1]：").arg(normalizedName.isEmpty() ? "(未命名)" : normalizedName);
+        if (normalizedName.isEmpty()) {
             localErrors << "字段名不能为空";
+        } else if (fieldNames.contains(normalizedName)) {
+            localErrors << prefix + "字段名重复，字段名必须唯一";
+        } else {
+            fieldNames.insert(normalizedName);
         }
         const int defaultLength = typeDefaultLength(field.type);
         if (defaultLength < 0) {

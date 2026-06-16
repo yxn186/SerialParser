@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 
+#include "CrcUtil.h"
 #include "EncodingUtil.h"
 #include "HexUtil.h"
 
@@ -13,14 +14,18 @@
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QDialog>
+#include <QDoubleSpinBox>
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFont>
 #include <QFormLayout>
+#include <QFrame>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHeaderView>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
@@ -30,7 +35,10 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScrollBar>
+#include <QScrollArea>
 #include <QStringListModel>
+#include <QSignalBlocker>
+#include <QSlider>
 #include <QSpinBox>
 #include <QSplitter>
 #include <QStatusBar>
@@ -43,6 +51,11 @@
 #include <QTextEdit>
 #include <QUrl>
 #include <QVBoxLayout>
+
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <limits>
 
 namespace {
 constexpr int FieldNameColumn = 0;
@@ -59,6 +72,242 @@ constexpr int FieldDisplayColumn = 10;
 constexpr int FieldEnumMapColumn = 11;
 constexpr int FieldVisibleColumn = 12;
 constexpr int FieldPlotColumn = 13;
+constexpr int RemoteFloatSliderSteps = 1000;
+
+class SwitchCheckBox : public QCheckBox
+{
+public:
+    explicit SwitchCheckBox(QWidget *parent = nullptr)
+        : QCheckBox(parent)
+    {
+        setCursor(Qt::PointingHandCursor);
+        setFixedSize(64, 30);
+        setText(QString());
+    }
+
+    QSize sizeHint() const override
+    {
+        return QSize(64, 30);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+
+        const QRectF track = rect().adjusted(1, 2, -1, -2);
+        const bool on = isChecked();
+        const QColor trackColor = on ? QColor("#18b99d") : QColor("#263646");
+        const QColor borderColor = on ? QColor("#72f7d0") : QColor("#435468");
+        painter.setPen(QPen(borderColor, 1));
+        painter.setBrush(trackColor);
+        painter.drawRoundedRect(track, track.height() / 2.0, track.height() / 2.0);
+
+        const qreal knobSize = track.height() - 6.0;
+        const qreal knobX = on ? track.right() - knobSize - 3.0 : track.left() + 3.0;
+        const QRectF knob(knobX, track.top() + 3.0, knobSize, knobSize);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor("#f5fbff"));
+        painter.drawEllipse(knob);
+
+        painter.setPen(QColor(on ? "#09231f" : "#b7c4d1"));
+        painter.setFont(QFont(font().family(), 7, QFont::Bold));
+        painter.drawText(track.adjusted(on ? 7 : knobSize + 7, 0, on ? -knobSize - 7 : -7, 0),
+                         Qt::AlignCenter,
+                         on ? "ON" : "OFF");
+    }
+};
+
+QString normalizedFieldType(const QString &type)
+{
+    return type.trimmed().toLower();
+}
+
+bool isUnsignedIntegerType(const QString &type)
+{
+    const QString t = normalizedFieldType(type);
+    return t == "uint8" || t == "uint16" || t == "uint32";
+}
+
+bool isSignedIntegerType(const QString &type)
+{
+    const QString t = normalizedFieldType(type);
+    return t == "int8" || t == "int16" || t == "int32";
+}
+
+bool isIntegerType(const QString &type)
+{
+    return isUnsignedIntegerType(type) || isSignedIntegerType(type);
+}
+
+bool isFloatType(const QString &type)
+{
+    const QString t = normalizedFieldType(type);
+    return t == "float32" || t == "float64";
+}
+
+int integerBitCount(const QString &type)
+{
+    const QString t = normalizedFieldType(type);
+    if (t.endsWith("8")) {
+        return 8;
+    }
+    if (t.endsWith("16")) {
+        return 16;
+    }
+    if (t.endsWith("32")) {
+        return 32;
+    }
+    return 0;
+}
+
+bool rawRangeForIntegerType(const QString &type, double *minValue, double *maxValue)
+{
+    const int bits = integerBitCount(type);
+    if (bits <= 0 || bits > 32) {
+        return false;
+    }
+
+    if (isUnsignedIntegerType(type)) {
+        *minValue = 0.0;
+        *maxValue = static_cast<double>((1ULL << bits) - 1ULL);
+        return true;
+    }
+
+    *minValue = -static_cast<double>(1LL << (bits - 1));
+    *maxValue = static_cast<double>((1LL << (bits - 1)) - 1LL);
+    return true;
+}
+
+bool sliderRangeForField(const FieldConfig &field, int *minValue, int *maxValue)
+{
+    if (!isIntegerType(field.type) || field.display == "enum" || field.display == "bool") {
+        return false;
+    }
+
+    const int bits = integerBitCount(field.type);
+    if (bits <= 0 || bits > 16) {
+        return false;
+    }
+
+    double minCandidate = 0.0;
+    double maxCandidate = 0.0;
+    if (!rawRangeForIntegerType(field.type, &minCandidate, &maxCandidate)) {
+        return false;
+    }
+    if (field.hasMin) {
+        minCandidate = field.minValue;
+    }
+    if (field.hasMax) {
+        maxCandidate = field.maxValue;
+    }
+
+    if (!std::isfinite(minCandidate) || !std::isfinite(maxCandidate) || minCandidate > maxCandidate) {
+        return false;
+    }
+
+    minCandidate = std::clamp(minCandidate,
+                              static_cast<double>(std::numeric_limits<int>::min()),
+                              static_cast<double>(std::numeric_limits<int>::max()));
+    maxCandidate = std::clamp(maxCandidate,
+                              static_cast<double>(std::numeric_limits<int>::min()),
+                              static_cast<double>(std::numeric_limits<int>::max()));
+    *minValue = static_cast<int>(std::ceil(minCandidate));
+    *maxValue = static_cast<int>(std::floor(maxCandidate));
+    return *minValue <= *maxValue;
+}
+
+QString formatRemoteNumber(double value, int decimals)
+{
+    if (decimals > 0) {
+        return QString::number(value, 'f', decimals);
+    }
+    return QString::number(static_cast<qint64>(std::llround(value)));
+}
+
+double sliderToFloatValue(int sliderValue, double minValue, double maxValue)
+{
+    if (maxValue <= minValue) {
+        return minValue;
+    }
+    const double ratio = static_cast<double>(sliderValue) / static_cast<double>(RemoteFloatSliderSteps);
+    return minValue + (maxValue - minValue) * ratio;
+}
+
+int floatValueToSlider(double value, double minValue, double maxValue)
+{
+    if (maxValue <= minValue) {
+        return 0;
+    }
+    const double ratio = (std::clamp(value, minValue, maxValue) - minValue) / (maxValue - minValue);
+    return std::clamp(static_cast<int>(std::llround(ratio * RemoteFloatSliderSteps)), 0, RemoteFloatSliderSteps);
+}
+
+bool writeBytesAt(QByteArray *frame, int offset, const QByteArray &bytes, QStringList *errors, const QString &name)
+{
+    if (offset < 0 || offset + bytes.size() > frame->size()) {
+        errors->append(QString("%1 写入范围超出 frameLength").arg(name));
+        return false;
+    }
+    for (int i = 0; i < bytes.size(); ++i) {
+        (*frame)[offset + i] = bytes.at(i);
+    }
+    return true;
+}
+
+void writeUnsignedValue(QByteArray *frame, int offset, int length, quint64 value, const QString &endian)
+{
+    for (int i = 0; i < length; ++i) {
+        const int shift = (endian == "big") ? (8 * (length - 1 - i)) : (8 * i);
+        (*frame)[offset + i] = static_cast<char>((value >> shift) & 0xffU);
+    }
+}
+
+quint64 integerMaskForBits(int bits)
+{
+    if (bits >= 64) {
+        return ~0ULL;
+    }
+    return (1ULL << bits) - 1ULL;
+}
+
+bool applyCrcToFrame(const ProtocolConfig &config, QByteArray *frame, QStringList *errors)
+{
+    if (!config.crc.enabled) {
+        return true;
+    }
+
+    const CrcConfig &crc = config.crc;
+    if (crc.offset < 0 || crc.length <= 0 || crc.offset + crc.length > frame->size()
+        || crc.rangeStart < 0 || crc.rangeLength <= 0 || crc.rangeStart + crc.rangeLength > frame->size()) {
+        errors->append("CRC 写入或计算范围超出 frameLength");
+        return false;
+    }
+
+    const QByteArray range = frame->mid(crc.rangeStart, crc.rangeLength);
+    if (crc.type == "sum8") {
+        (*frame)[crc.offset] = static_cast<char>(CrcUtil::sum8(range));
+        return true;
+    }
+    if (crc.type == "xor8") {
+        (*frame)[crc.offset] = static_cast<char>(CrcUtil::xor8(range));
+        return true;
+    }
+    if (crc.type == "crc8") {
+        (*frame)[crc.offset] = static_cast<char>(CrcUtil::crc8(range));
+        return true;
+    }
+    if (crc.type == "crc16_modbus") {
+        const quint16 value = CrcUtil::crc16Modbus(range);
+        (*frame)[crc.offset] = static_cast<char>(value & 0xffU);
+        (*frame)[crc.offset + 1] = static_cast<char>((value >> 8) & 0xffU);
+        return true;
+    }
+
+    errors->append("不支持的 CRC 类型：" + crc.type);
+    return false;
+}
 }
 
 MainWindow::MainWindow(QWidget *parent)
@@ -101,17 +350,19 @@ void MainWindow::setupUi()
     leftLayout->addWidget(setupConfigPanel());
     leftLayout->addStretch();
 
+    QTabWidget *functionTabs = new QTabWidget(mainSplitter);
+    functionTabs->setObjectName("FunctionTabs");
+    functionTabs->addTab(setupReceivePage(), "接收解析数据");
+    functionTabs->addTab(setupRemoteControlPage(), "发送数据遥控");
+
     mainSplitter->addWidget(leftPanel);
-    mainSplitter->addWidget(setupValuePanel());
-    mainSplitter->addWidget(setupProtocolTabs());
+    mainSplitter->addWidget(functionTabs);
     mainSplitter->setStretchFactor(0, 0);
-    mainSplitter->setStretchFactor(1, 2);
-    mainSplitter->setStretchFactor(2, 2);
-    mainSplitter->setSizes({280, 560, 620});
+    mainSplitter->setStretchFactor(1, 1);
+    mainSplitter->setSizes({280, 1180});
 
     root->addWidget(mainSplitter, 5);
-    root->addWidget(setupSendPanel(), 1);
-    root->addWidget(setupRawAndLogPanel(), 3);
+    root->addWidget(setupRawAndLogPanel(), 2);
 
     setCentralWidget(central);
     statusBar()->showMessage("Ready");
@@ -226,6 +477,8 @@ QGroupBox *MainWindow::setupConfigPanel()
     QPushButton *loadButton = new QPushButton("加载配置", group);
     QPushButton *saveButton = new QPushButton("保存配置", group);
     QPushButton *saveAsButton = new QPushButton("另存为", group);
+    QPushButton *importButton = new QPushButton("导入配置", group);
+    QPushButton *refreshConfigButton = new QPushButton("刷新配置列表", group);
     QPushButton *openFolderButton = new QPushButton("打开 configs 文件夹", group);
 
     layout->addWidget(new QLabel("当前配置"));
@@ -233,11 +486,15 @@ QGroupBox *MainWindow::setupConfigPanel()
     layout->addWidget(loadButton);
     layout->addWidget(saveButton);
     layout->addWidget(saveAsButton);
+    layout->addWidget(importButton);
+    layout->addWidget(refreshConfigButton);
     layout->addWidget(openFolderButton);
 
     connect(loadButton, &QPushButton::clicked, this, &MainWindow::loadSelectedConfig);
     connect(saveButton, &QPushButton::clicked, this, &MainWindow::saveCurrentConfig);
     connect(saveAsButton, &QPushButton::clicked, this, &MainWindow::saveConfigAs);
+    connect(importButton, &QPushButton::clicked, this, &MainWindow::importConfig);
+    connect(refreshConfigButton, &QPushButton::clicked, this, &MainWindow::refreshConfigList);
     connect(openFolderButton, &QPushButton::clicked, this, &MainWindow::openConfigFolder);
     return group;
 }
@@ -453,6 +710,105 @@ QWidget *MainWindow::setupProtocolTabs()
     return tabs;
 }
 
+QWidget *MainWindow::setupReceivePage()
+{
+    QWidget *page = new QWidget(this);
+    QVBoxLayout *layout = new QVBoxLayout(page);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(8);
+
+    QSplitter *splitter = new QSplitter(Qt::Horizontal, page);
+    splitter->addWidget(setupValuePanel());
+    splitter->addWidget(setupProtocolTabs());
+    splitter->setStretchFactor(0, 2);
+    splitter->setStretchFactor(1, 2);
+    splitter->setSizes({560, 620});
+    layout->addWidget(splitter);
+
+    return page;
+}
+
+QWidget *MainWindow::setupRemoteControlPage()
+{
+    QWidget *page = new QWidget(this);
+    QVBoxLayout *layout = new QVBoxLayout(page);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(8);
+
+    QSplitter *splitter = new QSplitter(Qt::Vertical, page);
+    splitter->addWidget(setupRemoteControlPanel());
+    splitter->addWidget(setupSendPanel());
+    splitter->setStretchFactor(0, 5);
+    splitter->setStretchFactor(1, 1);
+    splitter->setSizes({620, 120});
+    layout->addWidget(splitter);
+
+    return page;
+}
+
+QGroupBox *MainWindow::setupRemoteControlPanel()
+{
+    QGroupBox *group = new QGroupBox("配置化遥控发送", this);
+    QVBoxLayout *layout = new QVBoxLayout(group);
+    layout->setSpacing(8);
+
+    QHBoxLayout *toolbar = new QHBoxLayout;
+    m_remoteFrequencySpin = new QSpinBox(group);
+    m_remoteFrequencySpin->setObjectName("CurveSpinBox");
+    m_remoteFrequencySpin->setMinimumHeight(40);
+    m_remoteFrequencySpin->setMinimumWidth(96);
+    m_remoteFrequencySpin->setRange(1, 1000);
+    m_remoteFrequencySpin->setValue(20);
+    m_remoteFrequencySpin->setSuffix(" Hz");
+    m_remoteFrequencySpin->setToolTip("定时发送频率");
+
+    QPushButton *sendOnceButton = new QPushButton("单次发送", group);
+    sendOnceButton->setObjectName("PrimaryButton");
+    m_remoteStartStopButton = new QPushButton("开始定时发送", group);
+    QPushButton *refreshPreviewButton = new QPushButton("刷新预览", group);
+    m_remoteFrameInfoLabel = new QLabel("帧预览：等待配置", group);
+    m_remoteFrameInfoLabel->setObjectName("SubtleLabel");
+
+    toolbar->addWidget(new QLabel("发送频率", group));
+    toolbar->addWidget(m_remoteFrequencySpin);
+    toolbar->addWidget(sendOnceButton);
+    toolbar->addWidget(m_remoteStartStopButton);
+    toolbar->addWidget(refreshPreviewButton);
+    toolbar->addStretch();
+    toolbar->addWidget(m_remoteFrameInfoLabel);
+
+    m_remoteFieldContainer = new QWidget(group);
+    m_remoteFieldLayout = new QVBoxLayout(m_remoteFieldContainer);
+    m_remoteFieldLayout->setContentsMargins(0, 0, 0, 0);
+    m_remoteFieldLayout->setSpacing(6);
+    m_remoteFieldLayout->addStretch();
+
+    QScrollArea *fieldScroll = new QScrollArea(group);
+    fieldScroll->setWidgetResizable(true);
+    fieldScroll->setFrameShape(QFrame::NoFrame);
+    fieldScroll->setWidget(m_remoteFieldContainer);
+
+    m_remotePreviewEdit = new QPlainTextEdit(group);
+    m_remotePreviewEdit->setReadOnly(true);
+    m_remotePreviewEdit->setMaximumBlockCount(12);
+    m_remotePreviewEdit->setMinimumHeight(74);
+
+    layout->addLayout(toolbar);
+    layout->addWidget(fieldScroll, 1);
+    layout->addWidget(new QLabel("当前发送帧 HEX 预览", group));
+    layout->addWidget(m_remotePreviewEdit);
+
+    connect(sendOnceButton, &QPushButton::clicked, this, &MainWindow::sendRemoteFrame);
+    connect(m_remoteStartStopButton, &QPushButton::clicked, this, &MainWindow::toggleRemoteSending);
+    connect(refreshPreviewButton, &QPushButton::clicked, this, &MainWindow::updateRemoteFramePreview);
+    connect(m_remoteFrequencySpin, qOverload<int>(&QSpinBox::valueChanged), this, &MainWindow::updateRemoteSendInterval);
+    connect(&m_remoteSendTimer, &QTimer::timeout, this, [this]() {
+        transmitRemoteFrame(false);
+    });
+
+    return group;
+}
+
 QGroupBox *MainWindow::setupSendPanel()
 {
     QGroupBox *group = new QGroupBox("发送区", this);
@@ -543,6 +899,12 @@ void MainWindow::setupConnections()
     connect(&m_parser, &ProtocolParser::errorOccurred, this, [this](const QString &message) {
         appendLog(message, true);
     });
+    connect(&m_configWatcher, &QFileSystemWatcher::directoryChanged, this, [this]() {
+        QTimer::singleShot(120, this, &MainWindow::refreshConfigList);
+    });
+    connect(&m_configWatcher, &QFileSystemWatcher::fileChanged, this, [this]() {
+        QTimer::singleShot(120, this, &MainWindow::refreshConfigList);
+    });
     connect(m_curvePanel, &CurvePanel::plotFieldChanged, this, &MainWindow::syncPlotFieldFromCurve);
     connect(m_curvePanel, &CurvePanel::detachRequested, this, &MainWindow::openDetachedCurveWindow);
     connect(m_openCloseButton, &QPushButton::clicked, this, &MainWindow::toggleSerialPort);
@@ -589,17 +951,23 @@ void MainWindow::refreshConfigList()
     }
 
     m_profileCombo->clear();
-    m_profilePaths.clear();
     for (const ConfigInfo &info : configs) {
-        m_profileCombo->addItem(info.profileName);
-        m_profilePaths.insert(info.profileName, info.filePath);
+        m_profileCombo->addItem(configDisplayName(info), info.filePath);
+        const QString tooltip = QString("文件：%1\n路径：%2").arg(info.fileName, info.filePath);
+        m_profileCombo->setItemData(m_profileCombo->count() - 1, tooltip, Qt::ToolTipRole);
     }
+
+    const int currentIndex = m_profileCombo->findData(m_currentConfigPath);
+    if (currentIndex >= 0) {
+        m_profileCombo->setCurrentIndex(currentIndex);
+    }
+
+    updateConfigWatcher();
 }
 
 void MainWindow::loadSelectedConfig()
 {
-    const QString profile = m_profileCombo->currentText();
-    const QString path = m_profilePaths.value(profile);
+    const QString path = m_profileCombo->currentData().toString();
     if (path.isEmpty()) {
         appendLog("没有可加载的配置文件");
         return;
@@ -622,6 +990,7 @@ void MainWindow::loadSelectedConfig()
     }
 
     m_currentConfigPath = path;
+    updateConfigTitle();
     appendLog("已加载配置：" + path);
 }
 
@@ -634,9 +1003,36 @@ void MainWindow::saveCurrentConfig()
         return;
     }
 
+    const QString desiredPath = QDir(m_configManager.configDirPath()).filePath(profileFileName(config.profileName));
     QString path = m_currentConfigPath;
+    QString oldPathToRemove;
     if (path.isEmpty()) {
-        path = QDir(m_configManager.configDirPath()).filePath(profileFileName(config.profileName));
+        path = desiredPath;
+    } else {
+        const QFileInfo currentInfo(path);
+        const QFileInfo desiredInfo(desiredPath);
+        const QString configDirPath = QDir(m_configManager.configDirPath()).absolutePath();
+        const bool currentInConfigDir = currentInfo.absoluteDir().absolutePath() == configDirPath;
+        if (currentInConfigDir && currentInfo.fileName() != desiredInfo.fileName()) {
+            oldPathToRemove = currentInfo.absoluteFilePath();
+            path = desiredInfo.absoluteFilePath();
+        }
+    }
+
+    const bool targetIsDifferentFile = QFileInfo(path).absoluteFilePath()
+                                           .compare(QFileInfo(m_currentConfigPath).absoluteFilePath(), Qt::CaseInsensitive)
+                                       != 0;
+    if (targetIsDifferentFile && QFile::exists(path)) {
+        const int ret = QMessageBox::question(
+            this,
+            "覆盖配置文件",
+            QString("配置名称对应的文件已存在：\n%1\n\n是否覆盖这个文件？").arg(path),
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No);
+        if (ret != QMessageBox::Yes) {
+            appendLog("已取消保存，目标配置文件已存在：" + path);
+            return;
+        }
     }
 
     QString error;
@@ -646,11 +1042,24 @@ void MainWindow::saveCurrentConfig()
         return;
     }
 
+    if (!oldPathToRemove.isEmpty() && QFileInfo(oldPathToRemove).absoluteFilePath()
+                                           .compare(QFileInfo(path).absoluteFilePath(), Qt::CaseInsensitive)
+                                       != 0
+        && QFile::exists(oldPathToRemove)) {
+        QFile oldFile(oldPathToRemove);
+        if (oldFile.remove()) {
+            appendLog("配置文件名已同步：" + QFileInfo(oldPathToRemove).fileName() + " -> " + QFileInfo(path).fileName());
+        } else {
+            appendLog("旧配置文件删除失败：" + oldFile.errorString(), true);
+        }
+    }
+
     m_currentConfigPath = path;
     m_config = config;
+    updateConfigTitle();
     appendLog("已保存配置：" + path);
     refreshConfigList();
-    const int index = m_profileCombo->findText(config.profileName);
+    const int index = m_profileCombo->findData(path);
     if (index >= 0) {
         m_profileCombo->setCurrentIndex(index);
     }
@@ -679,8 +1088,73 @@ void MainWindow::saveConfigAs()
     }
     m_currentConfigPath = path;
     m_config = config;
+    updateConfigTitle();
     appendLog("已另存为配置：" + path);
     refreshConfigList();
+    const int index = m_profileCombo->findData(path);
+    if (index >= 0) {
+        m_profileCombo->setCurrentIndex(index);
+    }
+}
+
+void MainWindow::importConfig()
+{
+    const QString sourcePath = QFileDialog::getOpenFileName(this, "导入配置", QDir::homePath(), "JSON (*.json)");
+    if (sourcePath.isEmpty()) {
+        return;
+    }
+
+    ProtocolConfig importedConfig;
+    QStringList loadErrors;
+    if (!m_configManager.loadConfig(sourcePath, &importedConfig, &loadErrors)) {
+        appendLog("导入配置失败：" + loadErrors.join("\n"), true);
+        QMessageBox::warning(this, "导入失败", "外部 JSON 配置无效，未导入：\n\n" + loadErrors.join("\n"));
+        return;
+    }
+
+    const QString targetPath = QDir(m_configManager.configDirPath()).filePath(profileFileName(importedConfig.profileName));
+    const QString sourceAbsolute = QFileInfo(sourcePath).absoluteFilePath();
+    const QString targetAbsolute = QFileInfo(targetPath).absoluteFilePath();
+    const bool sameFile = sourceAbsolute.compare(targetAbsolute, Qt::CaseInsensitive) == 0;
+
+    if (!sameFile && QFile::exists(targetPath)) {
+        const int ret = QMessageBox::question(
+            this,
+            "覆盖配置文件",
+            QString("导入配置名称为：%1\n\n对应文件已存在：\n%2\n\n是否覆盖？")
+                .arg(importedConfig.profileName, targetPath),
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No);
+        if (ret != QMessageBox::Yes) {
+            appendLog("已取消导入，目标配置文件已存在：" + targetPath);
+            return;
+        }
+    }
+
+    QString saveError;
+    if (!m_configManager.saveConfig(targetPath, importedConfig, &saveError)) {
+        appendLog("导入配置保存失败：" + saveError, true);
+        QMessageBox::warning(this, "导入失败", "配置校验通过，但写入 configs 目录失败：\n\n" + saveError);
+        return;
+    }
+
+    m_currentConfigPath = targetPath;
+    applyConfigToUi(importedConfig);
+
+    QStringList parserErrors;
+    if (!m_parser.setConfig(importedConfig, &parserErrors)) {
+        appendLog("导入后应用配置失败：" + parserErrors.join("\n"), true);
+        QMessageBox::warning(this, "配置错误", parserErrors.join("\n"));
+        return;
+    }
+
+    refreshConfigList();
+    const int index = m_profileCombo->findData(targetPath);
+    if (index >= 0) {
+        m_profileCombo->setCurrentIndex(index);
+    }
+
+    appendLog("已导入配置：" + sourcePath + " -> " + targetPath);
 }
 
 void MainWindow::openConfigFolder()
@@ -709,6 +1183,7 @@ void MainWindow::applyUiConfig()
     m_profileLabel->setText("配置：" + config.profileName);
     m_rawDataEdit->setMaximumBlockCount(config.rawDisplay.maxLines);
     populateValueTable(config.fields);
+    populateRemoteControlPanel(config.fields);
     m_curvePanel->setConfig(config);
     for (CurvePanel *panel : m_detachedCurvePanels) {
         if (panel) {
@@ -1161,6 +1636,10 @@ void MainWindow::handleParserStats(const ParserStats &stats)
     m_discardedBytesLabel->setText(QString::number(stats.discardedBytes));
     m_rxBufferLengthLabel->setText(QString::number(stats.rxBufferLength));
 
+    if (!stats.lastValidFrameTime.isValid()) {
+        setOnlineBadge(false);
+    }
+
     const quint64 totalErrors = stats.headerErrorCount + stats.tailErrorCount + stats.crcErrorCount
                               + stats.lengthErrorCount + stats.fieldErrorCount;
     statusBar()->showMessage(QString("有效帧：%1 | 错误：%2 | RxBuffer：%3 字节")
@@ -1175,6 +1654,7 @@ void MainWindow::handleSerialStateChanged(bool opened)
     m_portStateLabel->setText(opened ? "状态：已打开 " + m_serialService.portName() : "状态：未打开");
     if (!opened) {
         setOnlineBadge(false);
+        stopRemoteSending();
     }
     appendLog(opened ? "串口已打开" : "串口已关闭");
 }
@@ -1313,6 +1793,7 @@ void MainWindow::applyConfigToUi(const ProtocolConfig &config)
     applySerialDefaultsToUi(config.serial);
     populateFieldConfigTable(config.fields);
     populateValueTable(config.fields);
+    populateRemoteControlPanel(config.fields);
     m_curvePanel->setConfig(config);
     for (CurvePanel *panel : m_detachedCurvePanels) {
         if (panel) {
@@ -1331,8 +1812,9 @@ void MainWindow::applyConfigToUi(const ProtocolConfig &config)
     m_rawTimestampCheck->setChecked(config.rawDisplay.showTimestamp);
     m_rawMaxLinesSpin->setValue(config.rawDisplay.maxLines);
     m_rawDataEdit->setMaximumBlockCount(config.rawDisplay.maxLines);
+    updateRemoteFramePreview();
 
-    m_profileLabel->setText("配置：" + config.profileName);
+    updateConfigTitle();
 }
 
 bool MainWindow::readConfigFromUi(ProtocolConfig *config, QStringList *errors) const
@@ -1595,6 +2077,517 @@ void MainWindow::updateValueTable(const QVector<FieldValue> &values)
     }
 }
 
+void MainWindow::populateRemoteControlPanel(const QVector<FieldConfig> &fields)
+{
+    if (!m_remoteFieldLayout) {
+        return;
+    }
+
+    stopRemoteSending();
+    while (QLayoutItem *item = m_remoteFieldLayout->takeAt(0)) {
+        if (QWidget *widget = item->widget()) {
+            widget->deleteLater();
+        }
+        delete item;
+    }
+    m_remoteEditors.clear();
+
+    for (const FieldConfig &field : fields) {
+        RemoteFieldEditor editor;
+        QWidget *row = createRemoteFieldRow(field, &editor);
+        if (!row) {
+            continue;
+        }
+        m_remoteEditors.append(editor);
+        m_remoteFieldLayout->addWidget(row);
+    }
+    m_remoteFieldLayout->addStretch();
+    updateRemoteFramePreview();
+}
+
+QWidget *MainWindow::createRemoteFieldRow(const FieldConfig &field, RemoteFieldEditor *editor)
+{
+    if (!editor) {
+        return nullptr;
+    }
+
+    editor->field = field;
+
+    QFrame *row = new QFrame(m_remoteFieldContainer);
+    row->setFrameShape(QFrame::StyledPanel);
+    QGridLayout *layout = new QGridLayout(row);
+    layout->setContentsMargins(10, 8, 10, 8);
+    layout->setHorizontalSpacing(10);
+    layout->setVerticalSpacing(4);
+
+    QLabel *nameLabel = new QLabel(field.name, row);
+    nameLabel->setMinimumWidth(120);
+    QLabel *metaLabel = new QLabel(QString("%1  offset=%2  len=%3")
+                                       .arg(field.type)
+                                       .arg(field.offset)
+                                       .arg(field.type == "raw_hex" ? field.length : ProtocolConfig::typeDefaultLength(field.type)),
+                                   row);
+    metaLabel->setObjectName("SubtleLabel");
+
+    QLabel *rangeLabel = new QLabel(row);
+    rangeLabel->setObjectName("SubtleLabel");
+    if (field.hasMin || field.hasMax) {
+        const QString minText = field.hasMin ? QString::number(field.minValue, 'g', 8) : "-";
+        const QString maxText = field.hasMax ? QString::number(field.maxValue, 'g', 8) : "-";
+        rangeLabel->setText(QString("范围 %1 ~ %2").arg(minText, maxText));
+    } else {
+        rangeLabel->setText("范围按字段类型");
+    }
+
+    layout->addWidget(nameLabel, 0, 0, 2, 1);
+    layout->addWidget(metaLabel, 0, 1, 1, 2);
+    layout->addWidget(rangeLabel, 1, 1, 1, 2);
+
+    const QString type = normalizedFieldType(field.type);
+    if (type == "bool_uint8" || field.display == "bool") {
+        QHBoxLayout *switchLayout = new QHBoxLayout;
+        switchLayout->setContentsMargins(0, 0, 0, 0);
+        SwitchCheckBox *switchBox = new SwitchCheckBox(row);
+        QLabel *switchLabel = new QLabel("开关", row);
+        switchLayout->addWidget(switchBox);
+        switchLayout->addWidget(switchLabel);
+        switchLayout->addStretch();
+        editor->switchBox = switchBox;
+        layout->addLayout(switchLayout, 0, 3, 2, 2);
+        connect(switchBox, &QCheckBox::checkStateChanged, this, [this](Qt::CheckState) {
+            updateRemoteFramePreview();
+        });
+        return row;
+    }
+    if (false && (type == "bool_uint8" || field.display == "bool")) {
+        QCheckBox *switchBox = new QCheckBox("开启", row);
+        editor->switchBox = switchBox;
+        layout->addWidget(switchBox, 0, 3, 2, 1);
+        connect(switchBox, &QCheckBox::checkStateChanged, this, [this](Qt::CheckState) {
+            updateRemoteFramePreview();
+        });
+        return row;
+    }
+
+    if (field.display == "enum" && !field.enumMap.isEmpty()) {
+        QComboBox *combo = new QComboBox(row);
+        for (auto it = field.enumMap.constBegin(); it != field.enumMap.constEnd(); ++it) {
+            combo->addItem(QString("%1 - %2").arg(it.key(), it.value()), it.key());
+        }
+        editor->enumCombo = combo;
+        layout->addWidget(combo, 0, 3, 2, 2);
+        connect(combo, &QComboBox::currentIndexChanged, this, [this]() {
+            updateRemoteFramePreview();
+        });
+        return row;
+    }
+
+    QLineEdit *valueEdit = new QLineEdit(row);
+    valueEdit->setMinimumWidth(130);
+    editor->valueEdit = valueEdit;
+
+    const bool rawHex = type == "raw_hex";
+    if (rawHex) {
+        valueEdit->setPlaceholderText(QString("输入 %1 字节 HEX").arg(field.length));
+        valueEdit->setText(QString(QByteArray(field.length, '\0').toHex(' ')).toUpper());
+    } else {
+        double initialValue = 0.0;
+        if (field.hasMin && initialValue < field.minValue) {
+            initialValue = field.minValue;
+        }
+        if (field.hasMax && initialValue > field.maxValue) {
+            initialValue = field.maxValue;
+        }
+        valueEdit->setText(formatRemoteNumber(initialValue, qMax(0, field.decimals)));
+    }
+
+    layout->addWidget(valueEdit, 0, 3, 2, 1);
+    if (!field.unit.isEmpty()) {
+        layout->addWidget(new QLabel(field.unit, row), 0, 4, 2, 1);
+    }
+
+    int sliderMin = 0;
+    int sliderMax = 0;
+    if (sliderRangeForField(field, &sliderMin, &sliderMax)) {
+        QSlider *slider = new QSlider(Qt::Horizontal, row);
+        slider->setRange(sliderMin, sliderMax);
+        slider->setValue(std::clamp(0, sliderMin, sliderMax));
+        editor->slider = slider;
+        valueEdit->setText(QString::number(slider->value()));
+        layout->addWidget(slider, 0, 5, 2, 1);
+        connect(slider, &QSlider::valueChanged, this, [this, valueEdit](int value) {
+            const QSignalBlocker blocker(valueEdit);
+            valueEdit->setText(QString::number(value));
+            updateRemoteFramePreview();
+        });
+        connect(valueEdit, &QLineEdit::editingFinished, this, [this, valueEdit, slider]() {
+            bool ok = false;
+            const int value = valueEdit->text().trimmed().toInt(&ok);
+            if (!ok) {
+                updateRemoteFramePreview();
+                return;
+            }
+            const int clamped = std::clamp(value, slider->minimum(), slider->maximum());
+            {
+                const QSignalBlocker blocker(slider);
+                slider->setValue(clamped);
+            }
+            if (clamped != value) {
+                valueEdit->setText(QString::number(clamped));
+            }
+            updateRemoteFramePreview();
+        });
+    }
+
+    if (isFloatType(type)) {
+        const int decimals = qBound(1, qMax(field.decimals, 3), 6);
+        double minValue = field.hasMin ? field.minValue : -1.0;
+        double maxValue = field.hasMax ? field.maxValue : 1.0;
+        if (!std::isfinite(minValue) || !std::isfinite(maxValue) || minValue >= maxValue) {
+            minValue = -1.0;
+            maxValue = 1.0;
+        }
+
+        QDoubleSpinBox *minSpin = new QDoubleSpinBox(row);
+        QDoubleSpinBox *maxSpin = new QDoubleSpinBox(row);
+        minSpin->setRange(-1000000000.0, 1000000000.0);
+        maxSpin->setRange(-1000000000.0, 1000000000.0);
+        minSpin->setDecimals(decimals);
+        maxSpin->setDecimals(decimals);
+        minSpin->setPrefix("下限 ");
+        maxSpin->setPrefix("上限 ");
+        minSpin->setValue(minValue);
+        maxSpin->setValue(maxValue);
+        minSpin->setMinimumWidth(120);
+        maxSpin->setMinimumWidth(120);
+        editor->minSpin = minSpin;
+        editor->maxSpin = maxSpin;
+
+        QSlider *slider = new QSlider(Qt::Horizontal, row);
+        slider->setRange(0, RemoteFloatSliderSteps);
+        slider->setMinimumWidth(180);
+        editor->slider = slider;
+        layout->addWidget(minSpin, 0, 5);
+        layout->addWidget(maxSpin, 1, 5);
+        layout->addWidget(slider, 0, 6, 2, 1);
+
+        const auto clampEditValue = [valueEdit, minSpin, maxSpin, decimals]() {
+            bool ok = false;
+            double value = valueEdit->text().trimmed().toDouble(&ok);
+            if (!ok) {
+                value = std::clamp(0.0, minSpin->value(), maxSpin->value());
+            }
+            value = std::clamp(value, minSpin->value(), maxSpin->value());
+            valueEdit->setText(QString::number(value, 'f', decimals));
+            return value;
+        };
+        const auto updateSliderFromEdit = [valueEdit, slider, minSpin, maxSpin]() {
+            bool ok = false;
+            const double value = valueEdit->text().trimmed().toDouble(&ok);
+            if (!ok) {
+                return;
+            }
+            const QSignalBlocker blocker(slider);
+            slider->setValue(floatValueToSlider(value, minSpin->value(), maxSpin->value()));
+        };
+
+        const double initialFloat = clampEditValue();
+        slider->setValue(floatValueToSlider(initialFloat, minSpin->value(), maxSpin->value()));
+
+        connect(slider, &QSlider::valueChanged, this, [this, valueEdit, minSpin, maxSpin, decimals](int sliderValue) {
+            const double value = sliderToFloatValue(sliderValue, minSpin->value(), maxSpin->value());
+            const QSignalBlocker blocker(valueEdit);
+            valueEdit->setText(QString::number(value, 'f', decimals));
+            updateRemoteFramePreview();
+        });
+        connect(valueEdit, &QLineEdit::editingFinished, this, [this, clampEditValue, updateSliderFromEdit]() {
+            clampEditValue();
+            updateSliderFromEdit();
+            updateRemoteFramePreview();
+        });
+        const auto limitChanged = [this, minSpin, maxSpin, valueEdit, slider, decimals]() {
+            if (minSpin->value() >= maxSpin->value()) {
+                const QSignalBlocker blocker(maxSpin);
+                maxSpin->setValue(minSpin->value() + std::pow(10.0, -decimals));
+            }
+            bool ok = false;
+            double value = valueEdit->text().trimmed().toDouble(&ok);
+            if (!ok) {
+                value = minSpin->value();
+            }
+            value = std::clamp(value, minSpin->value(), maxSpin->value());
+            {
+                const QSignalBlocker blocker(valueEdit);
+                valueEdit->setText(QString::number(value, 'f', decimals));
+            }
+            {
+                const QSignalBlocker blocker(slider);
+                slider->setValue(floatValueToSlider(value, minSpin->value(), maxSpin->value()));
+            }
+            updateRemoteFramePreview();
+        };
+        connect(minSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, limitChanged);
+        connect(maxSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, limitChanged);
+    }
+
+    connect(valueEdit, &QLineEdit::textChanged, this, [this]() {
+        updateRemoteFramePreview();
+    });
+    return row;
+}
+
+void MainWindow::updateRemoteFramePreview()
+{
+    if (!m_remotePreviewEdit || !m_remoteFrameInfoLabel) {
+        return;
+    }
+
+    QByteArray frame;
+    QStringList errors;
+    if (!buildRemoteFrame(&frame, &errors)) {
+        m_remotePreviewEdit->setPlainText(errors.join('\n'));
+        m_remoteFrameInfoLabel->setText("帧预览：配置或输入有错误");
+        return;
+    }
+
+    m_remotePreviewEdit->setPlainText(HexUtil::bytesToHexString(frame));
+    m_remoteFrameInfoLabel->setText(QString("帧预览：%1 字节").arg(frame.size()));
+}
+
+bool MainWindow::buildRemoteFrame(QByteArray *frame, QStringList *errors) const
+{
+    QStringList localErrors;
+    if (!frame) {
+        return false;
+    }
+    frame->clear();
+
+    QStringList validationErrors;
+    if (!m_config.validate(&validationErrors)) {
+        localErrors << validationErrors;
+        if (errors) {
+            *errors = localErrors;
+        }
+        return false;
+    }
+
+    *frame = QByteArray(m_config.frameLength, '\0');
+
+    const QByteArray header = m_config.headerBytes();
+    const QByteArray tail = m_config.tailBytes();
+    writeBytesAt(frame, 0, header, &localErrors, "header");
+    if (!tail.isEmpty()) {
+        writeBytesAt(frame, m_config.frameLength - tail.size(), tail, &localErrors, "tail");
+    }
+
+    for (const RemoteFieldEditor &editor : m_remoteEditors) {
+        const FieldConfig &field = editor.field;
+        const QString type = normalizedFieldType(field.type);
+        const int length = (type == "raw_hex") ? field.length : ProtocolConfig::typeDefaultLength(type);
+        if (field.offset < 0 || length <= 0 || field.offset + length > frame->size()) {
+            localErrors << QString("%1 字段范围超出 frameLength").arg(field.name);
+            continue;
+        }
+
+        if (type == "raw_hex") {
+            QByteArray bytes;
+            QString error;
+            if (!editor.valueEdit || !HexUtil::parseHexString(editor.valueEdit->text(), &bytes, &error)) {
+                localErrors << QString("%1 HEX 输入错误：%2").arg(field.name, error);
+                continue;
+            }
+            if (bytes.size() != length) {
+                localErrors << QString("%1 HEX 长度应为 %2 字节，当前为 %3 字节").arg(field.name).arg(length).arg(bytes.size());
+                continue;
+            }
+            writeBytesAt(frame, field.offset, bytes, &localErrors, field.name);
+            continue;
+        }
+
+        if (type == "bool_uint8" || field.display == "bool") {
+            const quint8 value = (editor.switchBox && editor.switchBox->isChecked()) ? 1U : 0U;
+            (*frame)[field.offset] = static_cast<char>(value);
+            continue;
+        }
+
+        double displayValue = 0.0;
+        if (field.display == "enum" && editor.enumCombo) {
+            bool ok = false;
+            displayValue = editor.enumCombo->currentData().toString().toDouble(&ok);
+            if (!ok) {
+                localErrors << QString("%1 枚举值不是数字").arg(field.name);
+                continue;
+            }
+        } else {
+            if (!editor.valueEdit) {
+                localErrors << QString("%1 缺少输入控件").arg(field.name);
+                continue;
+            }
+            bool ok = false;
+            displayValue = editor.valueEdit->text().trimmed().toDouble(&ok);
+            if (!ok) {
+                localErrors << QString("%1 输入值不是数字").arg(field.name);
+                continue;
+            }
+        }
+
+        if (field.hasMin && displayValue < field.minValue) {
+            localErrors << QString("%1 低于最小值 %2").arg(field.name).arg(field.minValue, 0, 'g', 8);
+            continue;
+        }
+        if (field.hasMax && displayValue > field.maxValue) {
+            localErrors << QString("%1 高于最大值 %2").arg(field.name).arg(field.maxValue, 0, 'g', 8);
+            continue;
+        }
+
+        if (editor.minSpin && displayValue < editor.minSpin->value()) {
+            localErrors << QString("%1 低于发送下限 %2").arg(field.name).arg(editor.minSpin->value(), 0, 'g', 8);
+            continue;
+        }
+        if (editor.maxSpin && displayValue > editor.maxSpin->value()) {
+            localErrors << QString("%1 高于发送上限 %2").arg(field.name).arg(editor.maxSpin->value(), 0, 'g', 8);
+            continue;
+        }
+
+        if (field.display != "enum" && qFuzzyIsNull(field.scale)) {
+            localErrors << QString("%1 的 scale 不能为 0，无法反算原始值").arg(field.name);
+            continue;
+        }
+        const double rawDouble = (field.display == "enum") ? displayValue : (displayValue - field.bias) / field.scale;
+
+        if (isIntegerType(type)) {
+            if (!std::isfinite(rawDouble)) {
+                localErrors << QString("%1 原始整数值无效").arg(field.name);
+                continue;
+            }
+            const qint64 rawInteger = static_cast<qint64>(std::llround(rawDouble));
+            if (std::fabs(rawDouble - static_cast<double>(rawInteger)) > 0.000001) {
+                localErrors << QString("%1 反算后不是整数：%2").arg(field.name).arg(rawDouble, 0, 'g', 10);
+                continue;
+            }
+
+            double rawMin = 0.0;
+            double rawMax = 0.0;
+            rawRangeForIntegerType(type, &rawMin, &rawMax);
+            if (rawInteger < rawMin || rawInteger > rawMax) {
+                localErrors << QString("%1 原始值超出 %2 范围").arg(field.name, type);
+                continue;
+            }
+
+            const int bits = integerBitCount(type);
+            const quint64 encoded = static_cast<quint64>(rawInteger) & integerMaskForBits(bits);
+            writeUnsignedValue(frame, field.offset, length, encoded, m_config.endian);
+            continue;
+        }
+
+        if (type == "float32") {
+            const float raw = static_cast<float>(rawDouble);
+            QByteArray bytes(sizeof(float), Qt::Uninitialized);
+            std::memcpy(bytes.data(), &raw, sizeof(float));
+            if (m_config.endian == "big") {
+                std::reverse(bytes.begin(), bytes.end());
+            }
+            writeBytesAt(frame, field.offset, bytes, &localErrors, field.name);
+            continue;
+        }
+
+        if (type == "float64") {
+            const double raw = rawDouble;
+            QByteArray bytes(sizeof(double), Qt::Uninitialized);
+            std::memcpy(bytes.data(), &raw, sizeof(double));
+            if (m_config.endian == "big") {
+                std::reverse(bytes.begin(), bytes.end());
+            }
+            writeBytesAt(frame, field.offset, bytes, &localErrors, field.name);
+            continue;
+        }
+
+        localErrors << QString("%1 不支持发送类型 %2").arg(field.name, field.type);
+    }
+
+    applyCrcToFrame(m_config, frame, &localErrors);
+
+    if (errors) {
+        *errors = localErrors;
+    }
+    return localErrors.isEmpty();
+}
+
+bool MainWindow::transmitRemoteFrame(bool showDialog)
+{
+    QByteArray frame;
+    QStringList errors;
+    if (!buildRemoteFrame(&frame, &errors)) {
+        appendLog("遥控发送帧生成失败：" + errors.join("; "), true);
+        if (showDialog) {
+            QMessageBox::warning(this, "发送帧错误", errors.join("\n"));
+        }
+        return false;
+    }
+
+    QString error;
+    if (!m_serialService.sendData(frame, &error)) {
+        appendLog("遥控发送失败：" + error, true);
+        if (showDialog) {
+            QMessageBox::warning(this, "遥控发送失败", error);
+        }
+        stopRemoteSending();
+        return false;
+    }
+
+    appendRawDataLine("TX", frame);
+    updateRemoteFramePreview();
+    return true;
+}
+
+void MainWindow::sendRemoteFrame()
+{
+    transmitRemoteFrame(true);
+}
+
+void MainWindow::toggleRemoteSending()
+{
+    if (m_remoteSendTimer.isActive()) {
+        stopRemoteSending();
+        appendLog("已停止定时遥控发送");
+        return;
+    }
+
+    if (!transmitRemoteFrame(true)) {
+        return;
+    }
+
+    updateRemoteSendInterval();
+    m_remoteSendTimer.start();
+    if (m_remoteStartStopButton) {
+        m_remoteStartStopButton->setText("停止定时发送");
+    }
+    appendLog(QString("已开始定时遥控发送：%1 Hz").arg(m_remoteFrequencySpin ? m_remoteFrequencySpin->value() : 0));
+}
+
+void MainWindow::updateRemoteSendInterval()
+{
+    if (!m_remoteFrequencySpin) {
+        return;
+    }
+
+    const int intervalMs = qMax(1, qRound(1000.0 / static_cast<double>(m_remoteFrequencySpin->value())));
+    m_remoteSendTimer.setInterval(intervalMs);
+    if (m_remoteSendTimer.isActive()) {
+        m_remoteSendTimer.start(intervalMs);
+    }
+}
+
+void MainWindow::stopRemoteSending()
+{
+    if (m_remoteSendTimer.isActive()) {
+        m_remoteSendTimer.stop();
+    }
+    if (m_remoteStartStopButton) {
+        m_remoteStartStopButton->setText("开始定时发送");
+    }
+}
+
 void MainWindow::applySerialDefaultsToUi(const SerialDefaults &serial)
 {
     m_baudCombo->setCurrentText(QString::number(serial.baudrate));
@@ -1702,6 +2695,57 @@ QString MainWindow::sanitizeText(const QString &text) const
         }
     }
     return result;
+}
+
+QString MainWindow::configDisplayName(const ConfigInfo &info) const
+{
+    if (info.profileName.trimmed().isEmpty()) {
+        return info.fileName;
+    }
+
+    return info.profileName;
+}
+
+void MainWindow::updateConfigTitle()
+{
+    QString title = m_config.profileName.trimmed();
+    if (title.isEmpty()) {
+        title = "--";
+    }
+
+    if (!m_currentConfigPath.isEmpty()) {
+        title += " (" + QFileInfo(m_currentConfigPath).fileName() + ")";
+    }
+
+    m_profileLabel->setText("配置：" + title);
+}
+
+void MainWindow::updateConfigWatcher()
+{
+    const QStringList watchedFiles = m_configWatcher.files();
+    if (!watchedFiles.isEmpty()) {
+        m_configWatcher.removePaths(watchedFiles);
+    }
+
+    const QStringList watchedDirs = m_configWatcher.directories();
+    if (!watchedDirs.isEmpty()) {
+        m_configWatcher.removePaths(watchedDirs);
+    }
+
+    QDir dir(m_configManager.configDirPath());
+    if (!dir.exists()) {
+        return;
+    }
+
+    m_configWatcher.addPath(dir.absolutePath());
+    const QFileInfoList files = dir.entryInfoList({"*.json"}, QDir::Files, QDir::Name);
+    QStringList filePaths;
+    for (const QFileInfo &fileInfo : files) {
+        filePaths << fileInfo.absoluteFilePath();
+    }
+    if (!filePaths.isEmpty()) {
+        m_configWatcher.addPaths(filePaths);
+    }
 }
 
 QString MainWindow::profileFileName(const QString &profileName) const

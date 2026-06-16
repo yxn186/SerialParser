@@ -146,6 +146,32 @@ QSpinBox#CurveSpinBox::down-button:hover, QDoubleSpinBox#CurveSpinBox::down-butt
     border-left-color: #42cfe8;
 }
 
+QSlider::groove:horizontal {
+    height: 6px;
+    border-radius: 3px;
+    background: #263646;
+}
+
+QSlider::sub-page:horizontal {
+    height: 6px;
+    border-radius: 3px;
+    background: #18b99d;
+}
+
+QSlider::handle:horizontal {
+    width: 16px;
+    height: 16px;
+    margin: -6px 0;
+    border-radius: 8px;
+    background: #f5fbff;
+    border: 1px solid #72f7d0;
+}
+
+QSlider::handle:horizontal:hover {
+    background: #ffffff;
+    border-color: #42cfe8;
+}
+
 QTabWidget::pane {
     border: 1px solid #253342;
     border-radius: 8px;

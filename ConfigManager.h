@@ -9,6 +9,7 @@
 struct ConfigInfo
 {
     QString profileName;
+    QString fileName;
     QString filePath;
 };
 
@@ -29,4 +30,3 @@ public:
 private:
     QString m_configDirPath;
 };
-
